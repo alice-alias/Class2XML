@@ -107,7 +107,7 @@ namespace Class2XML
 
         public XElement CreateXML()
         {
-            return new XElement("attribute", new XAttribute("type", Type.FullName), Parameters.Select(x => x.CreateXML()));
+            return new XElement("attribute", new XAttribute("type", Type.DisplayFullName), Parameters.Select(x => x.CreateXML()));
         }
         
     }
@@ -121,11 +121,12 @@ namespace Class2XML
         {
             this.doc = doc;
             TypedValue = value;
+            if (type.IsSubclassOf(typeof(Enum)))
+                TypedValue = Enum.ToObject(type, TypedValue);
             Type = TypeInfo.Create(type, doc);
         }
 
         public TypeInfo Type { get; private set; }
-        public String TypeName { get { return Type.FullName; } }
         public Object TypedValue { get; private set; }
 
         public static IEnumerable<AttributeParameter> Create(IEnumerable<CustomAttributeTypedArgument> args, XMLDocCommentList doc = null)
@@ -148,7 +149,9 @@ namespace Class2XML
 
         public virtual XElement CreateXML()
         {
-            return new XElement("argument", new XAttribute("type", TypeName), new XAttribute("value", TypedValue.ToString()));
+            if(TypedValue is Type)
+                return new XElement("argument", new XAttribute("type", Type.DisplayFullName), new XAttribute("value", TypeInfo.Create((Type)TypedValue).DisplayFullName));
+            return new XElement("argument", new XAttribute("type", Type.DisplayFullName), new XAttribute("value", TypedValue.ToString()));
         }
     }
 
@@ -168,7 +171,7 @@ namespace Class2XML
             return elm;
         }
     }
-
+    
     class TypeInfo : MemberItem
     {
         [TypeConverter(typeof(ExpandableObjectConverter))]
@@ -206,7 +209,33 @@ namespace Class2XML
             return new TypeInfo(type, doc);
         }
 
-        public override string ToString() { return FullName; }
+        public override string ToString() { return DisplayFullName; }
+
+        public virtual string DisplayName
+        {
+            get
+            {
+                if (!Type.IsGenericType)
+                    return Type.Name;
+
+                return Type.Name.Split('`')[0] + "<" + string.Join(",", Type.GetGenericArguments().Select(x => x.IsGenericParameter ? x.Name : TypeInfo.Create(x).DisplayFullName)) + ">";
+            }
+        }
+
+        public virtual string DisplayFullName { 
+            get {
+                var path = DisplayName;
+
+                var t = Type;
+                while (t.IsNested)
+                {
+                    t = t.DeclaringType;
+                    path = TypeInfo.Create(t).DisplayName + "." + path;
+                }
+
+                return Type.Namespace + "." + path;
+            }
+        }
 
         public override MemberItem[] Children
         {
@@ -224,8 +253,7 @@ namespace Class2XML
 
         public override XElement CreateXML()
         {
-            var elm = new XElement(ElementName);
-            elm.SetAttributeValue("name", Name);
+            var elm = new XElement(ElementName, new XAttribute("name", DisplayName), new XAttribute("doc-name", XMLDocName));
 
             elm.Add(new XElement("assembly",
                 new XAttribute("name", AssemblyFullName),
@@ -260,6 +288,21 @@ namespace Class2XML
 
         public string[] Names { get { return Enum.GetNames(Type); } }
         public TypeInfo UnderlyingType { get { return TypeInfo.Create(Enum.GetUnderlyingType(Type)); } }
+
+        public override XElement CreateXML()
+        {
+            var elm = base.CreateXML();
+
+            elm.Add(new XElement("values", Names.Select(x =>
+            {
+                XElement doc = null;
+                if (Document["F:" + this.FullName + "." + x] != null)
+                    doc = new XElement("description", Document["F:" + this.FullName + "." + x].Nodes);
+                return new XElement("value", new XAttribute("name", x), doc);
+            })));
+            
+            return elm;
+        }
     }
 
     class ValueTypeInfo : TypeInfo
@@ -277,7 +320,32 @@ namespace Class2XML
             ElementName = "interface";
         }
 
-        public InterfaceInfo[] Extends { get { return Type.GetInterfaces().Select(x => (InterfaceInfo)TypeInfo.Create(x)).ToArray(); } }
+        public InterfaceInfo[] Extends { get { return GetDirectInterfaces(Type).Select(x => (InterfaceInfo)TypeInfo.Create(x)).ToArray(); } }
+
+        public override XElement CreateXML()
+        {
+            var elm = base.CreateXML();
+            elm.Add(CreateBaseXML());
+            return elm;
+        }
+
+        public static IEnumerable<Type> GetDirectInterfaces(Type type)
+        {
+
+            IEnumerable<Type> ifs = type.GetInterfaces();
+
+            IEnumerable<Type> ign = ifs.SelectMany(x => x.GetInterfaces());
+            if (type.BaseType != null)
+                ign = ign.Concat(type.BaseType.GetInterfaces());
+
+            return ifs.Except(ign);
+        }
+
+        public IEnumerable<XElement> CreateBaseXML()
+        {
+            return Extends.Select(x => new XElement("extends", new XAttribute("name", x.DisplayFullName), x.CreateBaseXML()));
+        }
+
     }
 
     class ClassInfo : TypeInfo
@@ -289,7 +357,32 @@ namespace Class2XML
         }
 
         public ClassInfo Extends { get { return Type.BaseType != null ? (ClassInfo)TypeInfo.Create(Type.BaseType, Document) : null; } }
-        public InterfaceInfo[] Implements { get { return Type.GetInterfaces().Select(x => (InterfaceInfo)TypeInfo.Create(x)).ToArray(); } }
+        public InterfaceInfo[] Implements { get { return InterfaceInfo.GetDirectInterfaces(Type).Select(x => (InterfaceInfo)TypeInfo.Create(x, Document)).ToArray(); } }
+
+        public bool IsStatic { get { return Type.IsAbstract && Type.IsSealed; } }
+        public bool IsAbstract { get { return Type.IsAbstract && !IsStatic; } }
+        public bool IsSealed { get { return Type.IsSealed && !IsStatic; } }
+
+        public override XElement CreateXML()
+        {
+            var elm = base.CreateXML();
+            if (IsStatic) elm.SetAttributeValue("static", "true");
+            if (IsAbstract) elm.SetAttributeValue("abstract", "true");
+            if (IsSealed) elm.SetAttributeValue("sealed", "true");
+
+            elm.Add(CreateBaseXML());
+
+            return elm;
+        }
+
+        public IEnumerable<XElement> CreateBaseXML()
+        {
+            if (Extends != null)
+                yield return new XElement("extends", new XAttribute("name", Extends.DisplayFullName), Extends.CreateBaseXML());
+
+            foreach (var i in Implements.Select(x => new XElement("implements", new XAttribute("name", x.DisplayFullName), x.CreateBaseXML())))
+                yield return i;
+        }
     }
 
 

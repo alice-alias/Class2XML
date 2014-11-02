@@ -79,6 +79,7 @@ namespace Class2XML
     class XMLDocCommentMember
     {
         public XElement XElement { get; private set; }
+        public IEnumerable<XNode> Nodes { get { return XElement.Nodes(); } }
 
         public XMLDocCommentMember(XElement element) { XElement = element; }
 
