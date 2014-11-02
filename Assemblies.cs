@@ -84,6 +84,91 @@ namespace Class2XML
         }
     }
 
+    [TypeConverter(typeof(ExpandableObjectConverter))]
+    class AttributeInfo
+    {
+        XMLDocCommentList doc;
+        public CustomAttributeData AttributeData { get; private set; }
+        public AttributeInfo(CustomAttributeData attrdata, XMLDocCommentList doc = null)
+        {
+            this.doc = doc;
+            AttributeData = attrdata;
+        }
+
+        public TypeInfo Type { get { return TypeInfo.Create(AttributeData.AttributeType, doc); } }
+
+        public AttributeParameter[] Parameters
+        {
+            get
+            {
+                return AttributeParameter.Create(AttributeData.ConstructorArguments, doc).Concat(AttributeData.NamedArguments.Select(x => new AttributeNamedParameter(x, doc))).ToArray();
+            }
+        }
+
+        public XElement CreateXML()
+        {
+            return new XElement("attribute", new XAttribute("type", Type.FullName), Parameters.Select(x => x.CreateXML()));
+        }
+        
+    }
+
+    [TypeConverter(typeof(ExpandableObjectConverter))]
+    class AttributeParameter
+    {
+        XMLDocCommentList doc;
+
+        protected AttributeParameter(Type type, Object value, XMLDocCommentList doc = null)
+        {
+            this.doc = doc;
+            TypedValue = value;
+            Type = TypeInfo.Create(type, doc);
+        }
+
+        public TypeInfo Type { get; private set; }
+        public String TypeName { get { return Type.FullName; } }
+        public Object TypedValue { get; private set; }
+
+        public static IEnumerable<AttributeParameter> Create(IEnumerable<CustomAttributeTypedArgument> args, XMLDocCommentList doc = null)
+        {
+            return args.Select(x => Create(x, doc)).SelectMany(_ => _);
+        }
+
+        public static  IEnumerable<AttributeParameter> Create(CustomAttributeTypedArgument arg, XMLDocCommentList doc = null)
+        {
+            if (arg.Value is System.Collections.IEnumerable && !(arg.Value is string))
+            {
+                foreach (var a in (System.Collections.IEnumerable)arg.Value)
+                    yield return new AttributeParameter(arg.ArgumentType, a, doc);
+            }
+            else
+            {
+                yield return new AttributeParameter(arg.ArgumentType, arg.Value, doc);
+            }
+        }
+
+        public virtual XElement CreateXML()
+        {
+            return new XElement("argument", new XAttribute("type", TypeName), new XAttribute("value", TypedValue.ToString()));
+        }
+    }
+
+    class AttributeNamedParameter : AttributeParameter
+    {
+        public string MemberName { get; private set; }
+        public AttributeNamedParameter(CustomAttributeNamedArgument arg, XMLDocCommentList doc = null) 
+            : base(arg.TypedValue.ArgumentType, arg.TypedValue.Value, doc)
+        {
+            MemberName = arg.MemberName;
+        }
+
+        public override XElement CreateXML()
+        {
+            var elm = base.CreateXML();
+            elm.Add(new XAttribute("name", MemberName));
+            return elm;
+        }
+    }
+
     class TypeInfo : MemberItem
     {
         [TypeConverter(typeof(ExpandableObjectConverter))]
@@ -98,7 +183,15 @@ namespace Class2XML
             return type.IsVisible && !type.IsNested;
         }
 
-        protected TypeInfo(Type type, XMLDocCommentList doc = null) : base(doc) { Type = type; }
+        protected TypeInfo(Type type, XMLDocCommentList doc = null) : base(doc) { 
+            Type = type;
+        }
+        
+        public AttributeInfo[] Attributes { 
+            get { 
+                return Type.GetCustomAttributesData().Select(x => new AttributeInfo(x, Document)).ToArray();
+            }
+        }
 
         public static TypeInfo Create(Type type, XMLDocCommentList doc = null)
         {
@@ -134,8 +227,16 @@ namespace Class2XML
             var elm = new XElement(ElementName);
             elm.SetAttributeValue("name", Name);
 
+            elm.Add(new XElement("assembly",
+                new XAttribute("name", AssemblyFullName),
+                new XAttribute("file", AssemblyFileName)));
+
+            if(Attributes.Length > 0)
+                elm.Add(new XElement("attributes", Attributes.Select(x => x.CreateXML())));
+
             if (DescriptionBody != null)
                 elm.Add(new XElement("description", DescriptionBody));
+
             return elm;
         }
     }
@@ -187,7 +288,7 @@ namespace Class2XML
             ElementName = "class";
         }
 
-        public ClassInfo Extends { get { return (ClassInfo)TypeInfo.Create(Type.BaseType, Document); } }
+        public ClassInfo Extends { get { return Type.BaseType != null ? (ClassInfo)TypeInfo.Create(Type.BaseType, Document) : null; } }
         public InterfaceInfo[] Implements { get { return Type.GetInterfaces().Select(x => (InterfaceInfo)TypeInfo.Create(x)).ToArray(); } }
     }
 
