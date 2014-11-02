@@ -19,6 +19,7 @@ namespace Class2XML
         public void Clear() { docs.Clear(); }
         public bool Contains(XMLDocComment item) { return docs.Contains(item); }
         public bool Contains(XMLDocCommentMember item) { return docs.Any(x => x.Members.Contains(item)); }
+        public bool Contains(string name) { return this.Any(x => x.Name == name); }
 
         public XMLDocCommentMember this[string name]
         {

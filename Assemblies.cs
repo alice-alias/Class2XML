@@ -27,8 +27,8 @@ namespace Class2XML
         [Browsable(false)]
         abstract public MemberItem[] Children { get; }
 
-        public virtual XElement Description { get { try { return Document[XMLDocName].XElement; } catch { return null; } } }
-        public virtual IEnumerable<XNode> DescriptionBody { get { try { return Description.Nodes(); } catch { return null; } } }
+        public virtual XElement Description { get { return Document.Contains(XMLDocName) ? Document[XMLDocName].XElement : null; } }
+        public virtual IEnumerable<XNode> DescriptionBody { get { return Description != null ? Description.Nodes() : null; } }
 
         public abstract XElement CreateXML();
     }
